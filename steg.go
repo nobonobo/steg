@@ -1,16 +1,18 @@
 package steg
 
 import (
+	"bytes"
 	"fmt"
 	"html/template"
 	"io"
-	"io/ioutil"
+	"net/http"
 	"os"
 	"path/filepath"
 )
 
 // Config ...
 type Config struct {
+	StaticRoot  string
 	Layout      string
 	PartsDir    string
 	ContentsDir string
@@ -19,58 +21,76 @@ type Config struct {
 
 // Engine ...
 type Engine struct {
-	config Config
 	m      map[string]*template.Template
+	config Config
+}
+
+func parse(dst *template.Template, r io.Reader) error {
+	b := new(bytes.Buffer)
+	_, err := b.ReadFrom(r)
+	if err != nil {
+		return err
+	}
+	_, err = dst.Parse(b.String())
+	return err
 }
 
 // New ...
 func New(config Config) (*Engine, error) {
-	parts, err := template.New("").ParseGlob(filepath.Join(config.PartsDir, "*.html"))
-	if err != nil {
-		return nil, err
-	}
-	if config.FuncMap != nil {
-		parts = parts.Funcs(config.FuncMap)
-	}
-	b, err := ioutil.ReadFile(config.Layout)
-	if err != nil {
-		return nil, err
-	}
-	layout, err := parts.Parse(string(b))
-	if err != nil {
-		return nil, err
-	}
-	m := map[string]*template.Template{}
-	if err := filepath.Walk(
-		config.ContentsDir,
-		func(path string, info os.FileInfo, err error) error {
-			if !info.IsDir() {
-				name, err := filepath.Rel(config.ContentsDir, path)
-				if err != nil {
-					return err
-				}
-				b, err := ioutil.ReadFile(path)
-				if err != nil {
-					return fmt.Errorf("parse fail in %s: %s", name, err)
-				}
-				clone, err := layout.Clone()
-				if err != nil {
-					return fmt.Errorf("parse fail in %s: %s", name, err)
-				}
-				parsed, err := clone.Parse(string(b))
-				if err != nil {
-					return fmt.Errorf("parse fail in %s: %s", name, err)
-				}
-				m[name] = parsed
+	base := template.New("")
+	dir := http.Dir(config.StaticRoot)
+	if err := Walk(dir, config.PartsDir,
+		func(path string, info os.FileInfo) error {
+			f, err := dir.Open(path)
+			if err != nil {
+				return fmt.Errorf("read failed in %s: %s", path, err)
+			}
+			if err := parse(base, f); err != nil {
+				return fmt.Errorf("parse failed in %s: %s", path, err)
 			}
 			return nil
 		},
 	); err != nil {
 		return nil, err
 	}
+	if config.FuncMap != nil {
+		base = base.Funcs(config.FuncMap)
+	}
+	f, err := dir.Open(config.Layout)
+	if err != nil {
+		return nil, err
+	}
+	if err := parse(base, f); err != nil {
+		return nil, err
+	}
+	loads := map[string]*template.Template{}
+	if err := Walk(dir, config.ContentsDir,
+		func(fname string, info os.FileInfo) error {
+			dst, err := base.Clone()
+			if err != nil {
+				return err
+			}
+			f, err := dir.Open(fname)
+			if err != nil {
+				return fmt.Errorf("read failed in %s: %s", fname, err)
+			}
+			if err := parse(dst, f); err != nil {
+				return fmt.Errorf("parse failed in %s: %s", fname, err)
+			}
+			name, err := filepath.Rel(config.ContentsDir, fname)
+			if err != nil {
+				return err
+			}
+			fmt.Println(name)
+			loads[name] = dst
+			return nil
+		},
+	); err != nil {
+		return nil, err
+	}
 	return &Engine{
+		m:      loads,
 		config: config,
-		m:      m,
 	}, nil
 }
 

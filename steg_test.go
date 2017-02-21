@@ -7,9 +7,10 @@ import (
 
 func TestEngine(t *testing.T) {
 	engine, err := New(Config{
-		Layout:      "./example/layout.html",
-		PartsDir:    "./example/parts",
-		ContentsDir: "./example/contents",
+		StaticRoot:  "./example",
+		Layout:      "layout.html",
+		PartsDir:    "parts",
+		ContentsDir: "contents",
 		FuncMap:     nil,
 	})
 	if err != nil {
